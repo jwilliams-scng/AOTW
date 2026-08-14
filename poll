@@ -1,19 +1,84 @@
-{
-  "id": "2026-week-1",
-  "title": "SCNG Athlete of the Week",
-  "closes": "2026-08-20T12:00:00-07:00",
-  "candidates": [
-    {
-      "id": "smith",
-      "name": "Jane Smith",
-      "school": "Mater Dei",
-      "performance": "18 kills and 12 digs"
-    },
-    {
-      "id": "jones",
-      "name": "John Jones",
-      "school": "Centennial",
-      "performance": "225 rushing yards and 3 TDs"
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>SCNG AOTW Test</title>
+
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      margin: 0;
+      padding: 20px;
+      background: #fff;
+      color: #222;
     }
-  ]
-}
+
+    .poll {
+      border: 1px solid #ddd;
+      border-radius: 6px;
+      padding: 20px;
+      max-width: 650px;
+      margin: 0 auto;
+    }
+
+    h2 {
+      margin-top: 0;
+    }
+
+    button {
+      padding: 10px 20px;
+      font-size: 16px;
+      cursor: pointer;
+    }
+
+    #result {
+      margin-top: 15px;
+      font-weight: bold;
+    }
+  </style>
+</head>
+
+<body>
+
+  <div class="poll">
+    <h2>SCNG Athlete of the Week</h2>
+
+    <p><strong>TEST POLL</strong></p>
+
+    <label>
+      <input type="radio" name="athlete" value="Jane Smith">
+      Jane Smith — Mater Dei
+    </label>
+
+    <br><br>
+
+    <label>
+      <input type="radio" name="athlete" value="John Jones">
+      John Jones — Centennial
+    </label>
+
+    <br><br>
+
+    <button id="voteButton">Vote</button>
+
+    <div id="result"></div>
+  </div>
+
+  <script>
+    document.getElementById("voteButton").addEventListener("click", function () {
+      const selected = document.querySelector('input[name="athlete"]:checked');
+
+      if (!selected) {
+        document.getElementById("result").textContent =
+          "Please select an athlete.";
+        return;
+      }
+
+      document.getElementById("result").textContent =
+        "TEST SUCCESSFUL — You selected " + selected.value;
+    });
+  </script>
+
+</body>
+</html>
