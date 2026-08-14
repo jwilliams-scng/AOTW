@@ -1,0 +1,14 @@
+AOTW/
+├── scng-aotw-polls.php
+├── includes/
+│   ├── class-poll-admin.php
+│   ├── class-poll-api.php
+│   ├── class-poll-database.php
+│   └── class-poll-security.php
+├── assets/
+│   ├── css/
+│   │   └── poll.css
+│   └── js/
+│       └── poll.js
+├── README.md
+└── .gitignore
