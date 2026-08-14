@@ -1,134 +1,225 @@
-const DEFAULT_ORIGIN = "https://jwilliams-scng.github.io";
+const ALLOWED_ORIGIN = "https://jwilliams-scng.github.io";
 
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
-    const origin = request.headers.get("Origin");
-    const allowedOrigin = env.ALLOWED_ORIGIN || DEFAULT_ORIGIN;
 
-    if (request.method === "OPTIONS") {
-      return new Response(null, { status: 204, headers: corsHeaders(origin, allowedOrigin) });
+    // SETUP DATABASE
+    if (request.method === "GET" && url.pathname === "/setup") {
+      try {
+        await env.DB.batch([
+          env.DB.prepare(`
+            CREATE TABLE IF NOT EXISTS polls (
+              id TEXT PRIMARY KEY,
+              title TEXT NOT NULL,
+              subtitle TEXT,
+              opens_at TEXT,
+              closes_at TEXT,
+              active INTEGER NOT NULL DEFAULT 1
+            )
+          `),
+
+          env.DB.prepare(`
+            CREATE TABLE IF NOT EXISTS candidates (
+              id INTEGER PRIMARY KEY AUTOINCREMENT,
+              poll_id TEXT NOT NULL,
+              name TEXT NOT NULL,
+              school TEXT NOT NULL,
+              class_year TEXT,
+              performance TEXT,
+              sort_order INTEGER NOT NULL DEFAULT 0
+            )
+          `),
+
+          env.DB.prepare(`
+            CREATE TABLE IF NOT EXISTS votes (
+              id INTEGER PRIMARY KEY AUTOINCREMENT,
+              poll_id TEXT NOT NULL,
+              candidate_id INTEGER NOT NULL,
+              voter_hash TEXT NOT NULL,
+              created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+              UNIQUE (poll_id, voter_hash)
+            )
+          `)
+        ]);
+
+        await env.DB.prepare(`
+          INSERT OR IGNORE INTO polls
+          (id, title, subtitle, opens_at, closes_at, active)
+          VALUES (?, ?, ?, ?, ?, 1)
+        `).bind(
+          "test-2026",
+          "SCNG High School Athlete of the Week",
+          "Vote for the top performance of the week.",
+          "2026-08-01T07:00:00Z",
+          "2026-12-31T20:00:00Z"
+        ).run();
+
+        const existing = await env.DB.prepare(
+          "SELECT COUNT(*) AS total FROM candidates WHERE poll_id = ?"
+        ).bind("test-2026").first();
+
+        if (existing.total === 0) {
+          await env.DB.batch([
+            env.DB.prepare(`
+              INSERT INTO candidates
+              (poll_id, name, school, class_year, performance, sort_order)
+              VALUES (?, ?, ?, ?, ?, ?)
+            `).bind(
+              "test-2026",
+              "Jane Smith",
+              "Mater Dei",
+              "Sr.",
+              "225 total yards and three touchdowns.",
+              1
+            ),
+
+            env.DB.prepare(`
+              INSERT INTO candidates
+              (poll_id, name, school, class_year, performance, sort_order)
+              VALUES (?, ?, ?, ?, ?, ?)
+            `).bind(
+              "test-2026",
+              "John Jones",
+              "Centennial",
+              "Jr.",
+              "12 tackles, three sacks and a forced fumble.",
+              2
+            )
+          ]);
+        }
+
+        return json({
+          ok: true,
+          message: "AOTW database is ready."
+        });
+
+      } catch (error) {
+        return json({
+          ok: false,
+          error: error.message
+        }, 500);
+      }
     }
 
-    if (origin && origin !== allowedOrigin) {
-      return json({ error: "Origin not allowed." }, 403, origin, allowedOrigin);
-    }
+    // GET POLL
+    if (request.method === "GET" && url.pathname === "/api/poll") {
+      const pollId = url.searchParams.get("id");
 
-    try {
-      if (request.method === "GET" && url.pathname === "/api/poll") {
-        const pollId = url.searchParams.get("id");
-        if (!pollId) return json({ error: "Missing poll id." }, 400, origin, allowedOrigin);
-        const poll = await getPoll(env.DB, pollId);
-        if (!poll) return json({ error: "Poll not found." }, 404, origin, allowedOrigin);
-        return json(poll, 200, origin, allowedOrigin);
+      const poll = await env.DB.prepare(
+        "SELECT * FROM polls WHERE id = ?"
+      ).bind(pollId).first();
+
+      if (!poll) {
+        return json({ error: "Poll not found" }, 404);
       }
 
-      if (request.method === "POST" && url.pathname === "/api/vote") {
-        const body = await request.json().catch(() => null);
-        if (!body || !body.pollId || !body.candidateId || !body.voterId) {
-          return json({ error: "Missing vote data." }, 400, origin, allowedOrigin);
-        }
-        if (typeof body.voterId !== "string" || body.voterId.length > 128) {
-          return json({ error: "Invalid voter id." }, 400, origin, allowedOrigin);
-        }
+      const result = await env.DB.prepare(`
+        SELECT
+          c.*,
+          COUNT(v.id) AS votes
+        FROM candidates c
+        LEFT JOIN votes v
+          ON v.candidate_id = c.id
+        WHERE c.poll_id = ?
+        GROUP BY c.id
+        ORDER BY c.sort_order
+      `).bind(pollId).run();
 
-        const pollRow = await env.DB.prepare(
-          `SELECT id, opens_at, closes_at, active FROM polls WHERE id = ?1 LIMIT 1`
-        ).bind(body.pollId).first();
-        if (!pollRow) return json({ error: "Poll not found." }, 404, origin, allowedOrigin);
-        if (!isOpen(pollRow)) {
-          return json({ error: "Voting is closed.", poll: await getPoll(env.DB, body.pollId) }, 403, origin, allowedOrigin);
-        }
+      const candidates = result.results || [];
 
-        const candidate = await env.DB.prepare(
-          `SELECT id FROM candidates WHERE id = ?1 AND poll_id = ?2 LIMIT 1`
-        ).bind(Number(body.candidateId), body.pollId).first();
-        if (!candidate) return json({ error: "Candidate not found." }, 400, origin, allowedOrigin);
+      const totalVotes = candidates.reduce(
+        (sum, candidate) => sum + Number(candidate.votes || 0),
+        0
+      );
 
-        const voterHash = await hashVoter(body.voterId, env.VOTER_SALT || "change-me");
-        const insert = await env.DB.prepare(
-          `INSERT OR IGNORE INTO votes (poll_id, candidate_id, voter_hash) VALUES (?1, ?2, ?3)`
-        ).bind(body.pollId, Number(body.candidateId), voterHash).run();
-
-        const poll = await getPoll(env.DB, body.pollId);
-        if (insert.meta.changes === 0) {
-          return json({ error: "A vote from this browser has already been recorded.", duplicate: true, poll }, 409, origin, allowedOrigin);
-        }
-        return json({ ok: true, poll }, 200, origin, allowedOrigin);
-      }
-
-      return json({ error: "Not found." }, 404, origin, allowedOrigin);
-    } catch (error) {
-      console.error(error);
-      return json({ error: "Server error." }, 500, origin, allowedOrigin);
+      return json({
+        id: poll.id,
+        title: poll.title,
+        subtitle: poll.subtitle,
+        opensAt: poll.opens_at,
+        closesAt: poll.closes_at,
+        open: true,
+        totalVotes,
+        candidates: candidates.map(c => ({
+          id: c.id,
+          name: c.name,
+          school: c.school,
+          classYear: c.class_year,
+          performance: c.performance,
+          votes: Number(c.votes || 0)
+        }))
+      });
     }
+
+    // RECORD VOTE
+    if (request.method === "POST" && url.pathname === "/api/vote") {
+      try {
+        const body = await request.json();
+
+        const voterHash = await hash(body.voterId);
+
+        const result = await env.DB.prepare(`
+          INSERT OR IGNORE INTO votes
+          (poll_id, candidate_id, voter_hash)
+          VALUES (?, ?, ?)
+        `).bind(
+          body.pollId,
+          body.candidateId,
+          voterHash
+        ).run();
+
+        if (result.meta.changes === 0) {
+          return json({
+            error: "You have already voted."
+          }, 409);
+        }
+
+        return json({
+          ok: true
+        });
+
+      } catch (error) {
+        return json({
+          error: error.message
+        }, 500);
+      }
+    }
+
+    return json({
+      message: "SCNG AOTW API is running",
+      setup: "/setup",
+      poll: "/api/poll?id=test-2026"
+    });
   }
 };
 
-function corsHeaders(origin, allowedOrigin) {
-  return {
-    "Access-Control-Allow-Origin": origin === allowedOrigin ? origin : allowedOrigin,
-    "Access-Control-Allow-Methods": "GET,POST,OPTIONS",
-    "Access-Control-Allow-Headers": "Content-Type,Accept",
-    "Access-Control-Max-Age": "86400",
-    "Vary": "Origin",
-    "Cache-Control": "no-store"
-  };
+async function hash(value) {
+  const data = new TextEncoder().encode(
+    "scng-aotw:" + value
+  );
+
+  const digest = await crypto.subtle.digest(
+    "SHA-256",
+    data
+  );
+
+  return Array.from(new Uint8Array(digest))
+    .map(b => b.toString(16).padStart(2, "0"))
+    .join("");
 }
 
-function json(data, status, origin, allowedOrigin) {
-  return new Response(JSON.stringify(data), {
-    status,
-    headers: { "Content-Type": "application/json; charset=utf-8", ...corsHeaders(origin, allowedOrigin) }
-  });
-}
-
-function isOpen(row) {
-  if (!row || Number(row.active) !== 1) return false;
-  const now = Date.now();
-  const opens = row.opens_at ? new Date(row.opens_at).getTime() : -Infinity;
-  const closes = row.closes_at ? new Date(row.closes_at).getTime() : Infinity;
-  return now >= opens && now < closes;
-}
-
-async function getPoll(db, pollId) {
-  const poll = await db.prepare(
-    `SELECT id, title, subtitle, opens_at, closes_at, active FROM polls WHERE id = ?1 LIMIT 1`
-  ).bind(pollId).first();
-  if (!poll) return null;
-
-  const candidateResult = await db.prepare(
-    `SELECT c.id, c.name, c.school, c.class_year, c.performance, c.sort_order, COUNT(v.id) AS votes
-     FROM candidates c
-     LEFT JOIN votes v ON v.candidate_id = c.id
-     WHERE c.poll_id = ?1
-     GROUP BY c.id
-     ORDER BY c.sort_order ASC, c.id ASC`
-  ).bind(pollId).run();
-
-  const candidates = (candidateResult.results || []).map(row => ({
-    id: row.id,
-    name: row.name,
-    school: row.school,
-    classYear: row.class_year,
-    performance: row.performance,
-    votes: Number(row.votes || 0)
-  }));
-  const totalVotes = candidates.reduce((sum, candidate) => sum + candidate.votes, 0);
-  return {
-    id: poll.id,
-    title: poll.title,
-    subtitle: poll.subtitle,
-    opensAt: poll.opens_at,
-    closesAt: poll.closes_at,
-    open: isOpen(poll),
-    totalVotes,
-    candidates
-  };
-}
-
-async function hashVoter(voterId, salt) {
-  const bytes = new TextEncoder().encode(`${salt}:${voterId}`);
-  const digest = await crypto.subtle.digest("SHA-256", bytes);
-  return [...new Uint8Array(digest)].map(byte => byte.toString(16).padStart(2, "0")).join("");
+function json(data, status = 200) {
+  return new Response(
+    JSON.stringify(data, null, 2),
+    {
+      status,
+      headers: {
+        "Content-Type": "application/json",
+        "Access-Control-Allow-Origin": ALLOWED_ORIGIN,
+        "Access-Control-Allow-Headers": "Content-Type",
+        "Access-Control-Allow-Methods": "GET,POST,OPTIONS"
+      }
+    }
+  );
 }
