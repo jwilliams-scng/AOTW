@@ -1,14 +1,19 @@
-AOTW/
-├── scng-aotw-polls.php
-├── includes/
-│   ├── class-poll-admin.php
-│   ├── class-poll-api.php
-│   ├── class-poll-database.php
-│   └── class-poll-security.php
-├── assets/
-│   ├── css/
-│   │   └── poll.css
-│   └── js/
-│       └── poll.js
-├── README.md
-└── .gitignore
+{
+  "id": "2026-week-1",
+  "title": "SCNG Athlete of the Week",
+  "closes": "2026-08-20T12:00:00-07:00",
+  "candidates": [
+    {
+      "id": "smith",
+      "name": "Jane Smith",
+      "school": "Mater Dei",
+      "performance": "18 kills and 12 digs"
+    },
+    {
+      "id": "jones",
+      "name": "John Jones",
+      "school": "Centennial",
+      "performance": "225 rushing yards and 3 TDs"
+    }
+  ]
+}
